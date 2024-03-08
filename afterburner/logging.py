@@ -120,8 +120,10 @@ class _BufferedStreamHandler(logging.StreamHandler):
             status_code: The http status code of the request.
         """
         http_request_data = {
-            "requestUrl": url,
-            "requestMethod": method,
+            # Disable these fields as otherwise the url is shown instead of the
+            # message in the log viewer.
+            # "requestUrl": url,
+            # "requestMethod": method,
             "status": status_code,
         }
         # Copy over the buffer in case somehow new logs occur. Those are just
