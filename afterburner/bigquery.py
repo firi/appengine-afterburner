@@ -111,7 +111,7 @@ class Client:
 
 
 
-    def query(self, query, legacy_sql=False, timeout=None, max_results=1000):
+    def query(self, query, legacy_sql=False, query_timeout=None, max_results=1000):
         """
         Run a query, wait for it to finish, then return the result. The entire
         query results are returned in a single request and in memory, so make
@@ -120,7 +120,8 @@ class Client:
         Args:
             query: A complete BigQuery query string.
             legacy_sql: Set to true if the query uses legacy SQL.
-            timeout: The timeout in seconds in which the query must complete.
+            query_timeout: The timeout in seconds in which the query must
+                complete.
             max_results: The maximum number of rows that are returned from the
                 query, if the result set is larger than this value. If set to
                 None, no maximum is applied, but the response sizes are still
@@ -135,14 +136,16 @@ class Client:
                 specified.
         """
         result = self._raw_query(query, legacy_sql=legacy_sql,
-                                 timeout=timeout, max_results=max_results)
+                                 query_timeout=query_timeout,
+                                 max_results=max_results)
         complete = result.get('jobComplete', False)
         if not complete:
             raise QueryTimeoutError("Query did not complete in time")
         return _convert_response_to_rows(result)
 
 
-    def _raw_query(self, query, legacy_sql=False, timeout=None, max_results=1000):
+    def _raw_query(self, query, legacy_sql=False, query_timeout=None,
+                   max_results=1000):
         """
         As the query() function, but returns the entire (decoded) JSON
         response.
@@ -150,7 +153,7 @@ class Client:
         Args:
             query: A complete BigQuery query string.
             legacy_sql: Set to true if the query uses legacy SQL.
-            timeout: The timeout in seconds in which the query must complete.
+            query_timeout: The timeout in seconds in which the query must complete.
             max_results: The maximum number of rows that are returned.
 
         Returns:
@@ -166,9 +169,9 @@ class Client:
             "useLegacySql": legacy_sql
         }
         request_timeout = None
-        if timeout is not None:
-            data["timeoutMs"] = int(timeout * 1000)
-            request_timeout = float(timeout + 5)  # extra slack
+        if query_timeout is not None:
+            data["timeoutMs"] = int(query_timeout * 1000)
+            request_timeout = float(query_timeout + 2)  # extra slack
         if max_results is not None and max_results >= 1:
             data["maxResults"] = int(max_results)
         return call_google_api(url, data=data,
@@ -181,7 +184,8 @@ class Client:
 class Row:
     """
     Data of a single row in a BigQuery query result. The data in the row can
-    be accessed through the field name, or by the index.
+    be accessed through the field name. A row can also be converted to a list
+    of its values.
     """
     def __init__(self, field_names, values):
         """
@@ -196,8 +200,8 @@ class Row:
         if len(field_names) != len(values):
             raise ValueError("field_names and values must be the same size")
         # Data is stored in a single dict and makes use of the builtin ordering
-        # in Python 3.7+.
-        self._data = dict(zip(field_names, values ))
+        # available in Python 3.7+.
+        self._data = dict(zip(field_names, values))
 
     def items(self):
         """
@@ -215,7 +219,7 @@ class Row:
         try:
             return self._data[name]
         except KeyError:
-            raise AttributeError(f"'{self.__class__.__name__}' object has no field '{name}'")
+            raise AttributeError(f"'Row' object has no field '{name}'")
 
     def __iter__(self):
         return iter(self._data.values())
@@ -227,7 +231,7 @@ class Row:
         field_value_pairs = []
         for field, value in self._data.items():
             field_value_pairs.append(f"{field}={value}")
-        return f"{self.__class__.__name__}({', '.join(field_value_pairs)})"
+        return f"Row({', '.join(field_value_pairs)})"
 
 
 def _convert_response_to_rows(response_data) -> List[Row]:
