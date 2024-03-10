@@ -3,14 +3,12 @@ A WSGI Application wrapper ("Middleware") to convert Python's logging module
 logs to "structured logging" (https://cloud.google.com/logging/docs/structured-logging).
 This wrapper integrates the logs with the request trace identifier from App
 Engine, so the logs ca be grouped together in the logs viewer (note, that this
-must be selected manually in the viewer, by choosing the 'request_log' filter).
+must be selected manually in the viewer, by choosing the 'request_log' in the
+'correlate by' drop down menu).
 
 This wrapper works without any additional dependencies (no need for the cloud
 logging libraries and all its dependencies!). It uses the builtin App Engine
 service that exports the stdout/stderr logs to Cloud logging.
-
-It does use App Engine builtin "legacy" APIs (which are great) to get the
-project identifier. This identifier can easily be hardcoded if needed.
 
 Usage:
     from google.appengine.api import wrap_wsgi_app
@@ -30,6 +28,7 @@ from ._internal import get_project_id
 # this identifier.
 _thread_local_request_data = threading.local()
 
+
 class StructuredLoggingMiddleware:
     """
     WSGI "Middleware" class that wraps all logs within the request to the
@@ -37,8 +36,8 @@ class StructuredLoggingMiddleware:
     possible in the chain of WSGI middlewares, so that all logs can be
     correlated to the requests.
     """
-    def __init__(self, app, level=None, _stream=None,):
-        """
+    def __init__(self, app, level=None, _stream=None):
+        """"
         Args:
             app: The WSGI application that is being wrapped.
             level: Set the log level that will be captured. If not set,
