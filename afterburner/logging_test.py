@@ -64,7 +64,7 @@ class LoggingTest(unittest.TestCase):
     def setUp(self):
         # We need an environment to get the project id
         self.testbed = testbed.Testbed()
-        self.testbed.setup_env(app_id='afterburner')
+        self.testbed.setup_env(app_id='afterburner', overwrite=True)
         self.testbed.activate()
         self.environ = {
             "HTTP_X_CLOUD_TRACE_CONTEXT": "trace_identifier",

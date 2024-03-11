@@ -15,7 +15,7 @@ _EXAMPLE_TIMESTAMP = _EXAMPLE_DATE.timestamp()
 class BigQueryClientTest(unittest.TestCase):
     def setUp(self):
         self.testbed = testbed.Testbed()
-        self.testbed.setup_env(app_id='afterburner')
+        self.testbed.setup_env(app_id='afterburner', overwrite=True)
         self.testbed.activate()
         self.testbed.init_memcache_stub()
         self.testbed.init_app_identity_stub()
