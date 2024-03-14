@@ -6,7 +6,7 @@ from io import StringIO
 
 from google.appengine.ext import testbed
 
-from .logging import StructuredLoggingMiddleware
+from .logging import StructuredLoggingMiddleware, Trace
 
 def log_single_line(environ, start_response, exc_info=None):
     """
@@ -66,10 +66,9 @@ class LoggingTest(unittest.TestCase):
         self.testbed = testbed.Testbed()
         self.testbed.setup_env(app_id='afterburner', overwrite=True)
         self.testbed.activate()
-        self.environ = {
-            "HTTP_X_CLOUD_TRACE_CONTEXT": "trace_identifier",
-            "PATH_INFO": "/path/test"
-        }
+        self.environ = {}
+        self.environ["HTTP_X_CLOUD_TRACE_CONTEXT"] = "trace_identifier/76614586407295139;o=1"
+        self.environ["PATH_INFO"] = "/path/test"
         # Store the log handlers and level
         self.saved_handlers = logging.root.handlers[:]
         self.saved_level = logging.root.level
@@ -99,6 +98,9 @@ class LoggingTest(unittest.TestCase):
                          "projects/afterburner/traces/trace_identifier")
         self.assertGreater(log_entry["timestamp"]["seconds"], 0)
         self.assertGreater(log_entry["timestamp"]["nanos"], 0)
+        self.assertEqual(log_entry["logging.googleapis.com/spanId"],
+                         "110308f776b98a3")
+        self.assertTrue(log_entry["logging.googleapis.com/trace_sampled"])
 
 
     def test_log_multiple_lines(self):
@@ -141,6 +143,7 @@ class LoggingTest(unittest.TestCase):
         log_entry = _read_log(stream)[0]
 
 
+
 def _read_log(stream):
     """
     Read the stream and returned JSON decoded log entries. Each line should
@@ -149,6 +152,48 @@ def _read_log(stream):
     logs = stream.getvalue()
     log_entries = logs.strip().split("\n")
     return [json.loads(entry) for entry in log_entries]
+
+
+class TraceTest(unittest.TestCase):
+    def test_empty_string(self):
+        trace = Trace.parsed_from_header("")
+        self.assertEqual(trace.trace_id, "")
+        self.assertIsNone(trace.span_id)
+        self.assertFalse(trace.sampled)
+
+    def test_span_integer_value(self):
+        """
+        Integer spans must be converted to hexadecimal values.
+        """
+        trace = Trace.parsed_from_header("trace/123456/something")
+        self.assertEqual(trace.trace_id, "trace")
+        self.assertEqual(trace.span_id, "1e240")
+
+    def test_multiple_slashes(self):
+        trace = Trace.parsed_from_header("trace/span/something")
+        self.assertEqual(trace.trace_id, "trace")
+        self.assertEqual(trace.span_id, "span")
+        self.assertFalse(trace.sampled)
+
+    def test_sampled(self):
+        trace = Trace.parsed_from_header("trace/span;o=1")
+        self.assertEqual(trace.trace_id, "trace")
+        self.assertEqual(trace.span_id, "span")
+        self.assertTrue(trace.sampled)
+
+    def test_no_span(self):
+        trace = Trace.parsed_from_header("trace")
+        self.assertEqual(trace.trace_id, "trace")
+        self.assertIsNone(trace.span_id)
+        self.assertFalse(trace.sampled)
+
+    def test_no_span_sampled(self):
+        trace = Trace.parsed_from_header("trace;o=1")
+        self.assertEqual(trace.trace_id, "trace")
+        self.assertIsNone(trace.span_id)
+        self.assertTrue(trace.sampled)
+
+
 
 
 if __name__ == '__main__':

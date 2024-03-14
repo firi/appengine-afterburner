@@ -20,6 +20,7 @@ import sys
 import threading
 import logging
 import json
+import wsgiref.util
 from ._internal import get_project_id
 
 
@@ -61,16 +62,6 @@ class StructuredLoggingMiddleware:
 
 
     def __call__(self, environ, start_response):
-        # If there is no trace, we can make one up on our own. However, on
-        # App Engine standard, each request should have a trace identifier.
-        trace_header = environ.get("HTTP_X_CLOUD_TRACE_CONTEXT")
-        if trace_header is None:
-            trace_header = _generate_trace_id()
-        trace = trace_header.split("/")
-        trace_id = f"projects/{self._project}/traces/{trace[0]}"
-        # Url & method for log output
-        url = _get_url(environ)
-        method = environ.get('REQUEST_METHOD', "GET")
         # Create a buffer to capture logs in for this request.
         _thread_local_request_data.log_buffer = []
         _thread_local_request_data.status_code = 0
@@ -83,14 +74,17 @@ class StructuredLoggingMiddleware:
         try:
             return self._app(environ, start_response_wrapper)
         finally:
-            self._handler.flush_logs(
-                    url=url,
-                    method=method,
-                    trace_id=trace_id,
-                    status_code=_thread_local_request_data.status_code)
+            # Copy over the buffer in case somehow new logs occur. Those are
+            # discarded then.
+            records = list(_thread_local_request_data.log_buffer)
+            if records:
+                self._handler.flush_logs(
+                        records,
+                        environ=environ,
+                        project=self._project,
+                        status_code=_thread_local_request_data.status_code)
             delattr(_thread_local_request_data, 'status_code')
             delattr(_thread_local_request_data, 'log_buffer')
-            self._handler.flush()
 
 
 class _BufferedStreamHandler(logging.StreamHandler):
@@ -109,15 +103,25 @@ class _BufferedStreamHandler(logging.StreamHandler):
             # Not in a request, just emit as usual
             super().emit(record)
 
-    def flush_logs(self, url=None, method=None, trace_id=None, status_code=0):
+    def flush_logs(self, records, environ=None, project=None, status_code=0):
         """
         Formats and writes all logs in the thread-local buffer to the output
         stream in structured logging format.
 
         Args:
-            trace_id: The Cloud Trace identifier
+            records: A list of LogRecord objects that will be written to the
+                logs.
+            environ: The WSGI environ object.
+            project: The project identifier.
             status_code: The http status code of the request.
         """
+        trace_header = environ.get("HTTP_X_CLOUD_TRACE_CONTEXT")
+        if trace_header is None:
+            trace = Trace(_generate_trace_id())
+        else:
+            trace = Trace.parsed_from_header(trace_header)
+
+        trace_id = f"projects/{project}/traces/{trace.trace_id}"
         http_request_data = {
             # Disable these fields as otherwise the url is shown instead of the
             # message in the log viewer.
@@ -125,11 +129,7 @@ class _BufferedStreamHandler(logging.StreamHandler):
             # "requestMethod": method,
             "status": status_code,
         }
-        # Copy over the buffer in case somehow new logs occur. Those are just
-        # discarded then.
-        records = list(_thread_local_request_data.log_buffer)
-        _thread_local_request_data.log_buffer.clear()
-        for record in list(records):
+        for record in records:
             message = self.formatter.format(record)
             # Output the timestamp of the record, so it shows up in the correct
             # place in traces
@@ -144,12 +144,17 @@ class _BufferedStreamHandler(logging.StreamHandler):
                     'nanos': nanoseconds,
                 },
                 "logging.googleapis.com/trace": trace_id,
+                "logging.googleapis.com/spanId": trace.span_id,
                 'logging.googleapis.com/sourceLocation': {
                     'file': record.filename,
                     'line': record.lineno,
                     'function': record.funcName,
                 }
             }
+            if trace.sampled:
+                # Not exactly sure what this gains us, but we have the
+                # information, so let's set it.
+                entry["logging.googleapis.com/trace_sampled"] = trace.sampled
             self.stream.write(json.dumps(entry) + self.terminator)
         self.flush()
 
@@ -170,6 +175,51 @@ class _LogFormatter(logging.Formatter):
         return message
 
 
+class Trace:
+    """
+    A parsed trace object from a HTTP_X_CLOUD_TRACE_CONTEXT header
+
+    Properties:
+        trace_id: The string identifier of the trace.
+        span_id: The string identifier of the active span, if available.
+        sampled: A boolean to indicate whether this trace is being sampled.
+    """
+    def __init__(self, trace_id, span_id=None, sampled=False):
+        if not trace_id:
+            trace_id = ""
+        self.trace_id = trace_id
+        self.span_id = span_id
+        self.sampled = bool(sampled)
+
+    @staticmethod
+    def parsed_from_header(header):
+        """
+        Parse the given |header| value from HTTP_X_CLOUD_TRACE_CONTEXT into a
+        Trace object.
+        """
+        parts = header.split(';')
+        trace = parts[0]
+        sampled = False
+        if len(parts) > 1:
+            options = parts[1]
+            sampled = "o=1" in options
+        trace_and_span = trace.split('/')
+        trace_id = trace_and_span[0]
+        span_id = trace_and_span[1] if len(trace_and_span) > 1 else None
+        if span_id:
+            # Convert the span_id to a hexademical string. In the header they
+            # are set as integers, but in the logs they need to be written
+            # as a hexadecimal strings to them to match.
+            try:
+                span_id = format(int(span_id), 'x')
+            except ValueError:
+                pass
+        return Trace(trace_id, span_id=span_id, sampled=sampled)
+
+    def __str__(self):
+        return f"Trace('{self.trace_id}', span_id='{self.span_id}', sampled={self.sampled})"
+
+
 def _generate_trace_id() -> str:
     import random
     return "%0x" % random.getrandbits(128)
@@ -177,9 +227,9 @@ def _generate_trace_id() -> str:
 
 def _get_url(environ):
     """
-    Returns the url, including scheme and path as set in the environment
+    Returns the url, including scheme and path as set in the environment.
     """
-    scheme = environ.get('wsgi.url_scheme', '')
-    host = environ.get('HTTP_HOST', '')
-    path = environ.get('PATH_INFO', '')
-    return f"{scheme}://{host}{path}"
+    try:
+        return wsgiref.util.request_uri(environ)
+    except KeyError:
+        return None
