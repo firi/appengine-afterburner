@@ -85,10 +85,6 @@ def create_appengine_app(enable_structured_logging=True):
     app = WSGICombiner(application, {
         '/bigquery': bigquery_application,
     })
-    # Enable the App Engine bundled services for Python 3
-    from google.appengine.api import wrap_wsgi_app
-    app = wrap_wsgi_app(app)
-
     # The StructuredLoggingMiddleware formats logs so that they can be
     # correlated with the requests in Cloud Logging.
     #
@@ -97,6 +93,11 @@ def create_appengine_app(enable_structured_logging=True):
     from afterburner.logging import StructuredLoggingMiddleware
     if enable_structured_logging:
         app = StructuredLoggingMiddleware(app, level=logging.INFO)
+
+    # Enable the App Engine bundled services for Python 3
+    from google.appengine.api import wrap_wsgi_app
+    app = wrap_wsgi_app(app)
+
     return app
 
 
