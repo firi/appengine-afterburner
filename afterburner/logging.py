@@ -131,10 +131,18 @@ class _BufferedStreamHandler(logging.StreamHandler):
         _thread_local_request_data.log_buffer.clear()
         for record in list(records):
             message = self.formatter.format(record)
+            # Output the timestamp of the record, so it shows up in the correct
+            # place in traces
+            seconds = int(record.created)
+            nanoseconds = int((record.created - seconds) * 1_000_000_000)
             entry = {
                 "severity": record.levelname,
                 "message": message,
                 "httpRequest": http_request_data,
+                'timestamp': {
+                    'seconds': seconds,
+                    'nanos': nanoseconds,
+                },
                 "logging.googleapis.com/trace": trace_id,
                 'logging.googleapis.com/sourceLocation': {
                     'file': record.filename,

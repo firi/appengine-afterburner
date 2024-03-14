@@ -97,6 +97,8 @@ class LoggingTest(unittest.TestCase):
         self.assertEqual(log_entry["httpRequest"]["status"], 200)
         self.assertEqual(log_entry["logging.googleapis.com/trace"],
                          "projects/afterburner/traces/trace_identifier")
+        self.assertGreater(log_entry["timestamp"]["seconds"], 0)
+        self.assertGreater(log_entry["timestamp"]["nanos"], 0)
 
 
     def test_log_multiple_lines(self):

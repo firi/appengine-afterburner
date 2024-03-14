@@ -14,7 +14,9 @@ def log_multiple_lines():
     by selecting "request_log" in the "correlate by" section of the log viewer.
     """
     logging.info("Info message")
+    time.sleep(0.05)
     logging.warning("Warning message")
+    time.sleep(0.05)
     logging.error("Error message")
     return "Logged some lines! Check the log viewer."
 
