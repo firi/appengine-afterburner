@@ -41,7 +41,9 @@ def call_google_api(url,
             is used.
 
     Returns:
-        The decoded JSON response of the request.
+        The decoded JSON response of the request. Some requests do not return
+        any content (for example with a 204 status), and in that case None is
+        returned.
 
     Raises:
         RequestFailedError: If the request could not be completed or some
@@ -65,9 +67,12 @@ def call_google_api(url,
                                   method=method,
                                   deadline=timeout,
                                   headers=headers)
-        if response.status_code != 200:
-            raise RequestFailedError(http_status_code=response.status_code,
-                                    message=_get_error_message(response.content))
+        status = response.status_code
+        if (status // 100) != 2:
+            raise RequestFailedError(http_status_code=status,
+                                     message=_get_error_message(response.content))
+        if status in (204, 205):
+            return None
         return json.loads(response.content)
     except urlfetch_errors.Error as e:
         raise RequestFailedError(exception=e)
