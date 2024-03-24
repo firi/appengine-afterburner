@@ -111,7 +111,7 @@ Other approaches such as the Storage Write API are just unnecessary complex
 if you do not need extremely high throughput.
 
 Afterburner contains a basic BigQuery client where that same streaming insert
-takes less than 100ms, using the builtin App Engine services for authentication
+takes around 50ms, using the builtin App Engine services for authentication
 and the BigQuery REST API.
 
 The client focuses on simplicity and can be used to insert data and perform
