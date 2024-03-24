@@ -63,7 +63,8 @@ gives at least something that resembles the original App Engine logging
 experience.
 
 Setting this up is easy in `main.py`:
-```
+
+```python
 your_application = ... # Your WSGI app
 
 def create_appengine_app(enable_structured_logging=True):
@@ -116,7 +117,7 @@ and the BigQuery REST API.
 The client focuses on simplicity and can be used to insert data and perform
 queries:
 
-```
+```python
 # The client uses the App Engine project id and service account by default
 from afterburner.bigquery import Client
 client = Client()
