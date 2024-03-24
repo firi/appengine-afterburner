@@ -24,8 +24,6 @@ SDK, to bring the App Engine 2nd gen experience as close as possible to what
 it was a decade ago! The focus is getting things working out the box, and
 providing simple clients to GCP services.
 
-# Features
-
 
 ## Cloud Logging
 
@@ -49,7 +47,13 @@ Luckily there is an alternative, and that is to use [structured logging](https:/
 The App Engine 2nd gen runtimes automatically send contents of stdout/stderr
 to the logging service (without any additional api calls in your request
 handler needed!). By formatting the contents in a specific way, we can get
-correlation working in the request logs.
+correlation working in the request logs:
+
+![Correlated Logs](images/correlated_logs.png)
+
+These also work correct in Cloud Trace:
+
+![Logs in a Trace](images/trace_with_logs.png)
 
 Afterburner has a `StructuredLoggingMiddleware` class that wraps your main
 application and intercepts all logs made during a request. These logs are then
