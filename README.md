@@ -62,7 +62,7 @@ added and correct severity level set. This enables the correlation feature, and
 gives at least something that resembles the original App Engine logging
 experience.
 
-Setting this is easy is easy in `main.py`:
+Setting this up is easy in `main.py`:
 ```
 your_application = ... # Your WSGI app
 
@@ -88,7 +88,7 @@ app = create_appengine_app()
 This sample code first enables the App Engine bundled services, then wraps the
 returned WSGI app in the `StructuredLoggingMiddleware`. A wrapper function is
 used to make it work easier with unittests, so you can disable the wrapper if
-needed, as it converts logs to JSON payloads which can be hard to read.
+needed. The JSON payloads can be hard to read when debugging.
 
 #### Error Reporting
 
