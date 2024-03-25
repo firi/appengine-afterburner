@@ -75,7 +75,7 @@ def bigquery_query():
 # Wrapper function to create the main WSGI application. The application
 # is created through a function, so it can also be used from unittests.
 #
-# This is needed because wrag_wsgi_app() copies the current environment
+# This is needed because wrap_wsgi_app() copies the current environment
 # variables 'into' the app, and those are important for certain tests. These
 # must thus be set first before this function is called.
 def create_appengine_app(enable_structured_logging=True):
@@ -90,8 +90,8 @@ def create_appengine_app(enable_structured_logging=True):
     #
     # Only wrap on the production environment, as the structured logging
     # makes the output very spammy while testing.
-    from afterburner.logging import StructuredLoggingMiddleware
     if enable_structured_logging:
+        from afterburner.logging import StructuredLoggingMiddleware
         app = StructuredLoggingMiddleware(app, level=logging.INFO)
 
     # Enable the App Engine bundled services for Python 3
