@@ -37,17 +37,24 @@ class StructuredLoggingMiddleware:
     possible in the chain of WSGI middlewares, so that all logs can be
     correlated to the requests.
     """
-    def __init__(self, app, level=None, _stream=None):
+    def __init__(self, app, level=None, show_full_file_paths=False, root_app_dir=None, _stream=None):
         """"
         Args:
             app: The WSGI application that is being wrapped.
             level: Set the log level that will be captured. If not set,
                 takes the current level of the root logger.
+            show_full_file_paths: Whether to show the full file paths in
+                the sourceLocation field of the log entry.
+            root_app_dir: The root directory of the application, which
+                will be stripped from the file paths in the logs if
+                show_full_file_paths is set to True.
             _stream: The stream that the logs are output to. Available for
                 testing.
         """
         self._app = app
         self._project = get_project_id()
+        self._show_full_file_paths = show_full_file_paths
+        self._root_app_dir = root_app_dir
 
         # Insert the log formatter
         root_logger = logging.getLogger()
@@ -82,7 +89,9 @@ class StructuredLoggingMiddleware:
                         records,
                         environ=environ,
                         project=self._project,
-                        status_code=_thread_local_request_data.status_code)
+                        status_code=_thread_local_request_data.status_code,
+                        show_full_file_paths=self._show_full_file_paths,
+                        root_app_dir=self._root_app_dir)
             delattr(_thread_local_request_data, 'status_code')
             delattr(_thread_local_request_data, 'log_buffer')
 
@@ -103,7 +112,7 @@ class _BufferedStreamHandler(logging.StreamHandler):
             # Not in a request, just emit as usual
             super().emit(record)
 
-    def flush_logs(self, records, environ=None, project=None, status_code=0):
+    def flush_logs(self, records, environ=None, project=None, status_code=0, show_full_file_paths=False, root_app_dir=None):
         """
         Formats and writes all logs in the thread-local buffer to the output
         stream in structured logging format.
@@ -114,6 +123,11 @@ class _BufferedStreamHandler(logging.StreamHandler):
             environ: The WSGI environ object.
             project: The project identifier.
             status_code: The http status code of the request.
+            show_full_file_paths: Whether to show the full file paths in
+                the sourceLocation field of the log entry.
+            root_app_dir: The root directory of the application, which
+                will be stripped from the file paths in the logs if
+                show_full_file_paths is set to True.
         """
         trace_header = environ.get("HTTP_X_CLOUD_TRACE_CONTEXT")
         if trace_header is None:
@@ -135,6 +149,14 @@ class _BufferedStreamHandler(logging.StreamHandler):
             # place in traces
             seconds = int(record.created)
             nanoseconds = int((record.created - seconds) * 1_000_000_000)
+
+            if not show_full_file_paths:
+                file = record.filename
+            else:
+                file = record.pathname
+                if root_app_dir and root_app_dir == record.pathname[0:root_app_dir_length]:
+                    file = file[root_app_dir_length:].lstrip('/')
+            
             entry = {
                 "severity": record.levelname,
                 "message": message,
@@ -146,7 +168,7 @@ class _BufferedStreamHandler(logging.StreamHandler):
                 "logging.googleapis.com/trace": trace_id,
                 "logging.googleapis.com/spanId": trace.span_id,
                 'logging.googleapis.com/sourceLocation': {
-                    'file': record.filename,
+                    'file': file,
                     'line': record.lineno,
                     'function': record.funcName,
                 }
