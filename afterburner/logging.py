@@ -143,6 +143,7 @@ class _BufferedStreamHandler(logging.StreamHandler):
             # "requestMethod": method,
             "status": status_code,
         }
+        root_app_dir_length = len(root_app_dir) if root_app_dir else 0
         for record in records:
             message = self.formatter.format(record)
             # Output the timestamp of the record, so it shows up in the correct
