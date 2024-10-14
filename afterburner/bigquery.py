@@ -27,6 +27,7 @@ Usage:
         values = list(row)
 """
 from typing import List
+from datetime import datetime
 
 from ._internal import get_project_id, call_google_api
 from .exceptions import RequestFailedError
@@ -252,17 +253,19 @@ def _convert_response_to_rows(response_data) -> List[Row]:
     def coerce_value(value, type):
         if value is None:
             return None
-        if type == 'STRING':
+        elif type == 'STRING':
             return value
-        if type == 'INTEGER':
+        elif type == 'INTEGER':
             return int(value)
-        if type == 'FLOAT' or type == 'FLOAT64':
+        elif type == 'FLOAT' or type == 'FLOAT64':
             return float(value)
-        if type == 'BOOLEAN':
+        elif type == 'BOOLEAN':
             return value.lower() == 'true'
-        if type == 'TIMESTAMP':
-            from datetime import datetime
+        elif type == 'TIMESTAMP':
             return datetime.fromtimestamp(float(value))
+        elif type == 'DATE':
+            return datetime.strptime(value, "%Y-%m-%d")
+
         # TOOD(tijmen): Add more types
         raise ValueError(f"Unsupported type '{type}' in query result")
 
