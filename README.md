@@ -37,11 +37,11 @@ must be associated with each log entry, and then in the log viewer, a user
 must select the "correlate by" drop-down menu and choose
 "App Engine request log".
 
-How do you get these trace headers? Google recommends the `google-cloud-logging` library to setup logs for App
-Engine to do this, but it has *many* heavy weight dependencies (including
-GRPC). It also does not play nice with AppEngine testbed because of the GRPC
-threads that are spawned. I didn't want to waste any more time investigating
-these problems and instead removed the library.
+How do you get these trace headers? Google recommends the `google-cloud-logging`
+library to setup logs for App Engine to do this, but it has *many* heavy weight
+dependencies (including GRPC). It also does not play nice with AppEngine testbed
+because of the GRPC threads that are spawned. I didn't want to waste any more
+time investigating these problems and instead removed the library.
 
 Luckily there is an alternative, and that is to use [structured logging](https://cloud.google.com/logging/docs/structured-logging).
 The App Engine 2nd gen runtimes automatically send contents of stdout/stderr
@@ -91,15 +91,18 @@ returned WSGI app in the `StructuredLoggingMiddleware`. A wrapper function is
 used to make it work easier with unittests, so you can disable the wrapper if
 needed. The JSON payloads can be hard to read when debugging.
 
-#### Error Reporting
+## Cloud Error Reporting
 
-Correlating the logs by trace id at least returns the ability so see the stack
-traces that correspond to requests that fail. Sadly, not all features of Error
-Reporting are yet available. Atttempts to get the http context to show in the
-Error Reporting tool has failed, for now likely because that service interprets
-logs from App Engine differently. I am still trying to get this working
-properly.
+By enabling the structured logging middleware described in previous section,
+Afterburner restores most of the functionality of GCP's Cloud Error Reporting
+tool. Most importantly, this will correlated the stack traces in the logs to the
+requests that fail. These stack traces then also show up in the emails that are
+send and so on.
 
+Sadly, not all features of Error Rporting are yet available. Atttempts to get
+the http context to show in the Error Reporting tool has failed, for now likely
+because that service interprets logs from App Engine differently. I am still
+trying to get this working properly.
 
 ## BigQuery
 
