@@ -437,6 +437,62 @@ class RequestLogsClientTest(unittest.TestCase):
         self.assertEqual(len(synthetic.logs), 1)
         self.assertEqual(synthetic.severity, 'WARNING')
 
+
+    def test_synthetic_request_status_filtering(self):
+        """Test that synthetic requests respect status filters."""
+        # Test with 5xx filter
+        def match_url(url):
+            return "logging.googleapis.com/v2/entries:list" in url
+
+        def handle_request(url, payload, method, headers, request, response, **kwargs):
+            response.StatusCode = 200
+            response.Content = json.dumps({
+                'entries': [
+                    # Orphaned app logs with 500 status
+                    {
+                        'timestamp': '2024-01-01T12:00:10.000Z',
+                        'severity': 'ERROR',
+                        'textPayload': 'Error log',
+                        'trace': 'projects/testapp/traces/trace-500',
+                        'httpRequest': {
+                            'requestMethod': 'POST',
+                            'requestUrl': '/api/error',
+                            'status': 500
+                        },
+                        'resource': {'labels': {'project_id': 'testapp', 'module_id': 'default', 'version_id': 'v1'}}
+                    },
+                    # Orphaned app logs with 200 status
+                    {
+                        'timestamp': '2024-01-01T12:00:11.000Z',
+                        'severity': 'INFO',
+                        'textPayload': 'Success log',
+                        'trace': 'projects/testapp/traces/trace-200',
+                        'httpRequest': {
+                            'requestMethod': 'GET',
+                            'requestUrl': '/api/success',
+                            'status': 200
+                        },
+                        'resource': {'labels': {'project_id': 'testapp', 'module_id': 'default', 'version_id': 'v1'}}
+                    }
+                ]
+            }).encode('utf-8')
+        # Test with 5xx filter
+        self.testbed.init_urlfetch_stub(urlmatchers=[(match_url, handle_request)])
+        cursor = request_logs.Cursor(max_age=timedelta(hours=1), status_filter='5xx')
+        logs, _ = self.client.fetch_request_logs(cursor)
+        # Should only get the 500 status synthetic request
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0].status, 500)
+        self.assertTrue(logs[0].is_synthetic)
+        # Test with 2xx filter
+        cursor = request_logs.Cursor(max_age=timedelta(hours=1), status_filter='2xx')
+        logs, _ = self.client.fetch_request_logs(cursor)
+        # Should only get the 200 status synthetic request
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0].status, 200)
+        self.assertTrue(logs[0].is_synthetic)
+
+
     def test_fetch_logs_with_orphaned_app_logs(self):
         """Test that orphaned app logs result in synthetic request logs."""
         # Modify URL matcher to return orphaned app logs
@@ -514,6 +570,7 @@ class RequestLogsClientTest(unittest.TestCase):
         self.assertEqual(normal_log.method, 'GET')
         self.assertEqual(normal_log.resource, '/api/normal')
         self.assertEqual(len(normal_log.logs), 1)
+
 
     def test_cursor_functionality(self):
         """Test Cursor encoding/decoding and usage."""

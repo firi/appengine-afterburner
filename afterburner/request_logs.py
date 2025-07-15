@@ -401,9 +401,8 @@ class Client:
                 request_filters.append('(protoPayload.status>=400)')
         if path_filter:
             # Simple escape for the path filter - replace wildcards with regex equivalent
-            # and escape special regex characters manually
+            # and escape special regex characters manually (except *)
             escaped = path_filter
-            # Escape common regex special characters (except *)
             for char in '.+?^${}[]|()\\':
                 escaped = escaped.replace(char, '\\' + char)
             # Convert * wildcards to .* regex
@@ -460,8 +459,13 @@ class Client:
                 logs = app_logs_by_trace.pop(trace_id, [])
                 request_logs.append(RequestLog(entry, logs=[LogMessage(l) for l in logs]))
         # Then, for all remaining app logs without any request, we create
-        # synthetic requests.
+        # synthetic requests. Note that when we are filtering on HTTP status
+        # code, we all of a sudden get a ton more of these, because the
+        # application logs itself are not filtered on status! This could be
+        # appended to the query,
         for logs in app_logs_by_trace.values():
+            if status_filter and not _matches_status_filter(logs, status_filter):
+                continue
             request_logs.append(_create_synthetic_request_log(logs))
         # Filter all requests that do not have the minimum severity, if we are
         # filtering on severity.
@@ -534,12 +538,12 @@ def _create_synthetic_request_log(orphaned_logs: list[dict]) -> RequestLog:
     # We assume these logs come from afterburner logging, which have the
     # httpRequest data in every log.
     http_request = orphaned_logs[0].get('httpRequest', {})
+    status = http_request.get('status', 0)
     method = http_request.get('requestMethod', 'UNKNOWN')
     resource = http_request.get('requestUrl', '')
     # Extract just the path from the URL if it's a full URL
     if resource and resource.startswith('http'):
         resource = urlparse(resource).path
-    status = http_request.get('status', 0)
     user_agent = http_request.get('userAgent', '')
     remote_ip = http_request.get('remoteIp', '')
     # Extract project and service info from the first log
@@ -585,3 +589,21 @@ _SEVERITY_ORDER = {
     'ERROR': 4,
     'CRITICAL': 5
 }
+
+def _matches_status_filter(logs: list[dict], status_filter: str) -> bool:
+    """
+    Check if the application logs matches the given status filter. Returns
+    True the first log matches the filter, False otherwise
+    """
+    status = logs[0].get('httpRequest', {}).get('status', 0)
+    if status_filter == '2xx':
+        return 200 <= status < 300
+    elif status_filter == '3xx':
+        return 300 <= status < 400
+    elif status_filter == '4xx':
+        return 400 <= status < 500
+    elif status_filter == '5xx':
+        return 500 <= status < 600
+    elif status_filter == 'errors':
+        return status >= 400
+    return True
