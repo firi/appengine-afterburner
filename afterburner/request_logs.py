@@ -39,6 +39,7 @@ import json
 import base64
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
+from urllib.parse import urlparse
 from afterburner._internal import call_google_api, get_project_id
 
 
@@ -535,6 +536,9 @@ def _create_synthetic_request_log(orphaned_logs: list[dict]) -> RequestLog:
     http_request = orphaned_logs[0].get('httpRequest', {})
     method = http_request.get('requestMethod', 'UNKNOWN')
     resource = http_request.get('requestUrl', '')
+    # Extract just the path from the URL if it's a full URL
+    if resource and resource.startswith('http'):
+        resource = urlparse(resource).path
     status = http_request.get('status', 0)
     user_agent = http_request.get('userAgent', '')
     remote_ip = http_request.get('remoteIp', '')
@@ -560,6 +564,7 @@ def _create_synthetic_request_log(orphaned_logs: list[dict]) -> RequestLog:
         'resource': {
             'type': 'gae_app',
             'labels': {
+                'project_id': project_id,
                 'module_id': service,
                 'version_id': version
             }

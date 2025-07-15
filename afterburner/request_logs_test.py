@@ -360,7 +360,7 @@ class RequestLogsClientTest(unittest.TestCase):
                 'textPayload': 'First orphaned log',
                 'httpRequest': {
                     'requestMethod': 'POST',
-                    'requestUrl': '/api/process',
+                    'requestUrl': 'https://example.com/api/process?param=value',
                     'status': 201,
                     'userAgent': 'TestAgent/1.0',
                     'remoteIp': '10.0.0.1'
@@ -502,6 +502,7 @@ class RequestLogsClientTest(unittest.TestCase):
         self.assertEqual(synthetic_log.method, 'POST')
         self.assertEqual(synthetic_log.resource, '/api/orphaned')
         self.assertEqual(synthetic_log.status, 500)
+        self.assertEqual(synthetic_log.project_id, 'testapp')
         self.assertEqual(synthetic_log.service, 'worker')
         self.assertEqual(synthetic_log.version, 'v3')
         self.assertEqual(len(synthetic_log.logs), 2)
