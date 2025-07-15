@@ -83,11 +83,21 @@ class RequestLog:
         severity: The highest severity level string found among all logs.
             Will be None if there are no logs, or one of DEBUG, INFO, WARNING,
             ERROR, or CRITICAL representing the most severe log level encountered.
+        is_synthetic: A boolean indicating if this is a synthetic request log
+            created for orphaned application logs that had no corresponding
+            request log. This can happen if log sinks are active that discard
+            these request logs but keep application logs. Synthetic logs
+            generally do not have complete request data.
     """
-
-    def __init__(self, entry: dict, project_id: str = ''):
-        """Initialize from a Cloud Logging API entry."""
-        self.project_id = project_id
+    def __init__(self, entry: dict,
+                 logs: list['LogMessage']=None,
+                 is_synthetic=False,):
+        """
+        Creates a new RequestLog from a Cloud Logging Api entry, with the
+        given |logs| attached to it.
+        """
+        if logs is None:
+            logs = []
         self.timestamp = _parse_timestamp(entry.get('timestamp', ''))
         # Request fields
         proto = entry.get('protoPayload', {})
@@ -101,24 +111,23 @@ class RequestLog:
         self.remote_ip = proto.get('ip', '')
         # Resource labels
         labels = entry.get('resource', {}).get('labels', {})
+        self.project_id = labels.get('project_id', '')
         self.service = labels.get('module_id', 'default')
         self.version = labels.get('version_id', '')
         # Trace id data
-        self.trace_id = _extract_trace_id(entry)
+        self.trace_id = _extract_trace_id(entry.get('trace', ''))
         self.trace_sampled = entry.get("traceSampled", False)
         self.logs = []
         self.severity = None
         # Initialize logs list with embedded logs from protoPayload.line
         lines = proto.get('line', [])
         self.logs.extend([LogMessage(line_entry=line) for line in lines])
-        if lines:
-            self._calculate_severity()
-
-    def _append_logs(self, logs: list["LogMessage"]):
-        """Attaches the log messages to this request"""
+        self.is_synthetic = is_synthetic
+        # Append all normal log message
         self.logs.extend(logs)
         self.logs.sort(key=lambda log: log.timestamp)
         self._calculate_severity()
+
 
     def _calculate_severity(self):
         """Calculate and set the highest severity from all logs."""
@@ -427,35 +436,44 @@ class Client:
             project=self.project,
             service_account_id=self._service_account_id
         )
-        # Process response. Each of the entries is divided between
-        # ruquest logs and application logs. Application logs are grouped on
-        # their trace id, which is set by our logging middleware.
+        # Process response.
+        #
+        # First extract all application logs and group them by their trace
+        # ID. Entries without a trace id are discarded as we cannot do anything
+        # with them.
         entries = response.get('entries', [])
-        request_logs: list[RequestLog] = []
         app_logs_by_trace = defaultdict(list)
+        for entry in entries:
+            if entry.get('protoPayload'):
+                continue
+            trace_id = _extract_trace_id(entry.get('trace', ''))
+            if trace_id:
+                app_logs_by_trace[trace_id].append(entry)
+        # Parse request logs and add the application logs to each request,
+        # removin gthem from the dictionary in the process.
+        request_logs: list[RequestLog] = []
         for entry in entries:
             proto_type = entry.get('protoPayload', {}).get('@type', '')
             if proto_type == 'type.googleapis.com/google.appengine.logging.v1.RequestLog':
-                request_logs.append(RequestLog(entry, self.project))
-            else:
-                # Must be an application log
-                trace = entry.get('trace', '')
-                if trace:
-                    trace_id = trace.split('/')[-1]
-                    app_logs_by_trace[trace_id].append(LogMessage(entry=entry))
-        next_page_token = response.get('nextPageToken')
-        # Correlate app logs with request logs
-        for request_log in request_logs:
-            if request_log.trace_id in app_logs_by_trace:
-                request_log._append_logs(app_logs_by_trace[request_log.trace_id])
+                trace_id = _extract_trace_id(entry.get('trace', ''))
+                logs = app_logs_by_trace.pop(trace_id, [])
+                request_logs.append(RequestLog(entry, logs=[LogMessage(l) for l in logs]))
+        # Then, for all remaining app logs without any request, we create
+        # synthetic requests.
+        for logs in app_logs_by_trace.values():
+            request_logs.append(_create_synthetic_request_log(logs))
         # Filter all requests that do not have the minimum severity, if we are
         # filtering on severity.
         if min_severity != 'ALL':
             value = _SEVERITY_ORDER.get(min_severity, 0)
             request_logs = [log for log in request_logs
                              if _SEVERITY_ORDER.get(log.severity, 0) >= value]
+        # Because we might have added synthetic request logs, we need to sort
+        # again on timestamp
+        request_logs.sort(key=lambda x: x.timestamp, reverse=True)
         # Create cursor for continuation, if possible.
         next_cursor = None
+        next_page_token = response.get('nextPageToken')
         if next_page_token:
             next_cursor = cursor.with_page_token(next_page_token)
         return request_logs, next_cursor
@@ -482,18 +500,76 @@ def _parse_latency(latency_str: str) -> float:
     except:
         return 0.0
 
-def _extract_trace_id(entry: dict) -> str:
-    """Extract trace ID from various possible locations."""
-    # Try structured logging trace field first
-    trace = entry.get('trace', '')
-    if trace:
-        # Format: projects/PROJECT_ID/traces/TRACE_ID
-        parts = trace.split('/')
-        if len(parts) >= 4:
-            return parts[-1]
-    # Try labels
-    return entry.get('labels', {}).get('compute.googleapis.com/resource_id', '')
+def _extract_trace_id(trace: str) -> str:
+    """
+    Extract trace ID from a full trace entry. Usually in the
+    form of projects/<projectname>/trace/<traceid>.
+    """
+    parts = trace.split('/')
+    if len(parts) >= 4:
+        return parts[-1]
+    return ''
 
+def _create_synthetic_request_log(orphaned_logs: list[dict]) -> RequestLog:
+    """
+    Create a synthetic RequestLog for orphaned application logs. In normal
+    circumstances, there should always be a request log for logs recorded by
+    our logging middleware. However, with Cloud Logging Log Sinks, it is easy
+    to discard the request but only keep the application logs. In those cases,
+    we still want to show the application logs, and thus we have to create
+    a synthetic entry.
+
+    Args:
+        orphaned_logs: List of Cloud Logging data objects that each are
+            application logs entries. They all must have the same trace_id.
+    """
+    if not orphaned_logs:
+        raise ValueError("Must have at least one log")
+    # Grab the trace
+    trace = orphaned_logs[0].get('trace')
+    trace_sampled = orphaned_logs[0].get('traceSampled')
+    # Find the earliest timestamp
+    earliest_timestamp = min(_parse_timestamp(log.get('timestamp')) for log in orphaned_logs)
+    # We assume these logs come from afterburner logging, which have the
+    # httpRequest data in every log.
+    http_request = orphaned_logs[0].get('httpRequest', {})
+    method = http_request.get('requestMethod', 'UNKNOWN')
+    resource = http_request.get('requestUrl', '')
+    status = http_request.get('status', 0)
+    user_agent = http_request.get('userAgent', '')
+    remote_ip = http_request.get('remoteIp', '')
+    # Extract project and service info from the first log
+    labels = orphaned_logs[0].get('resource', {}).get('labels', {})
+    project_id = labels.get('project_id', '')
+    service = labels.get('module_id', 'default')
+    version = labels.get('version_id', '')
+    # Create a synthetic entry that looks like a request log
+    synthetic_entry = {
+        'timestamp': earliest_timestamp.isoformat() + 'Z',
+        'protoPayload': {
+            '@type': 'type.googleapis.com/google.appengine.logging.v1.RequestLog',
+            'method': method,
+            'resource': resource,
+            'status': status,
+            'latency': '0s',
+            'requestSize': '0',
+            'responseSize': '0',
+            'userAgent': user_agent,
+            'ip': remote_ip,
+        },
+        'resource': {
+            'type': 'gae_app',
+            'labels': {
+                'module_id': service,
+                'version_id': version
+            }
+        },
+        'trace': trace,
+        'traceSampled': trace_sampled,
+    }
+    return RequestLog(synthetic_entry,
+                      logs=[LogMessage(log) for log in orphaned_logs],
+                      is_synthetic=True)
 
 
 # Severity levels in order of importance

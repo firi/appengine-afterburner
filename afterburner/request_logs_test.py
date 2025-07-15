@@ -231,6 +231,7 @@ class RequestLogsClientTest(unittest.TestCase):
             },
             'resource': {
                 'labels': {
+                    'project_id': 'testproject',
                     'module_id': 'default',
                     'version_id': 'v1'
                 }
@@ -238,7 +239,7 @@ class RequestLogsClientTest(unittest.TestCase):
             'trace': 'projects/test/traces/abc123'
         }
 
-        log = request_logs.RequestLog(entry, 'testproject')
+        log = request_logs.RequestLog(entry)
 
         self.assertEqual(log.method, 'GET')
         self.assertEqual(log.resource, '/test')
@@ -261,9 +262,7 @@ class RequestLogsClientTest(unittest.TestCase):
                 'function': 'test_func'
             }
         }
-
         log = request_logs.LogMessage(entry=entry)
-
         self.assertEqual(log.severity, 'WARNING')
         self.assertEqual(log.message, 'Test warning message')
         self.assertEqual(log.file, 'test.py')
@@ -343,14 +342,177 @@ class RequestLogsClientTest(unittest.TestCase):
         # Should be ERROR (highest severity from embedded logs)
         self.assertEqual(log.severity, 'ERROR')
         # Add some app logs
-        app_log_entry = {
+        message = request_logs.LogMessage(entry={
             'timestamp': '2024-01-01T12:00:00.150Z',
             'severity': 'CRITICAL',
             'textPayload': 'Critical error!'
-        }
-        log._append_logs([request_logs.LogMessage(entry=app_log_entry)])
-        # Should now be CRITICAL
+        })
+        log = request_logs.RequestLog(entry, logs=[message])
         self.assertEqual(log.severity, 'CRITICAL')
+
+    def test_synthetic_request_creation(self):
+        """Test creation of synthetic request logs for orphaned app logs."""
+        # Create orphaned app logs with httpRequest data
+        orphaned_logs = [
+            {
+                'timestamp': '2024-01-01T12:00:01.000Z',
+                'severity': 'INFO',
+                'textPayload': 'First orphaned log',
+                'httpRequest': {
+                    'requestMethod': 'POST',
+                    'requestUrl': '/api/process',
+                    'status': 201,
+                    'userAgent': 'TestAgent/1.0',
+                    'remoteIp': '10.0.0.1'
+                },
+                'resource': {
+                    'labels': {
+                        'project_id': 'test-project',
+                        'module_id': 'backend',
+                        'version_id': 'v2'
+                    }
+                },
+                'trace': 'project/test-project/trace/orphan-trace-123',
+            },
+            {
+                'timestamp': '2024-01-01T12:00:02.000Z',
+                'severity': 'ERROR',
+                'textPayload': 'Second orphaned log',
+                'resource': {
+                    'labels': {
+                        'project_id': 'test-project',
+                        'module_id': 'backend',
+                        'version_id': 'v2'
+                    }
+                },
+                'trace': 'project/test-project/trace/orphan-trace-123',
+            }
+        ]
+        # Create synthetic request
+        synthetic = request_logs._create_synthetic_request_log(orphaned_logs)
+        # Verify basic properties
+        self.assertTrue(synthetic.is_synthetic)
+        self.assertEqual(synthetic.trace_id, 'orphan-trace-123')
+        self.assertEqual(synthetic.method, 'POST')
+        self.assertEqual(synthetic.resource, '/api/process')
+        self.assertEqual(synthetic.status, 201)
+        self.assertEqual(synthetic.user_agent, 'TestAgent/1.0')
+        self.assertEqual(synthetic.remote_ip, '10.0.0.1')
+        self.assertEqual(synthetic.service, 'backend')
+        self.assertEqual(synthetic.version, 'v2')
+        # Should use earliest timestamp
+        self.assertEqual(synthetic.timestamp.isoformat(), '2024-01-01T12:00:01')
+        # Should have both logs attached
+        self.assertEqual(len(synthetic.logs), 2)
+        self.assertEqual(synthetic.logs[0].message, 'First orphaned log')
+        self.assertEqual(synthetic.logs[1].message, 'Second orphaned log')
+        # Should calculate severity as ERROR (highest)
+        self.assertEqual(synthetic.severity, 'ERROR')
+
+    def test_synthetic_request_without_http_data(self):
+        """Test synthetic request creation when httpRequest data is missing."""
+        orphaned_logs = [{
+                'timestamp': '2024-01-01T12:00:00.000Z',
+                'severity': 'WARNING',
+                'textPayload': 'Log without HTTP data',
+                'resource': {
+                    'labels': {
+                        'project_id': 'test-project',
+                        'module_id': 'default',
+                        'version_id': 'v1'
+                    }
+                },
+                'trace': 'project/test-project/trace/trace-1234',
+            }
+        ]
+        synthetic = request_logs._create_synthetic_request_log(orphaned_logs)
+        self.assertEqual(synthetic.method, 'UNKNOWN')
+        self.assertEqual(synthetic.resource, '')
+        self.assertEqual(synthetic.status, 0)
+        self.assertEqual(synthetic.user_agent, '')
+        self.assertEqual(synthetic.remote_ip, '')
+        # But should still have proper service/version
+        self.assertEqual(synthetic.service, 'default')
+        self.assertEqual(synthetic.version, 'v1')
+        self.assertEqual(len(synthetic.logs), 1)
+        self.assertEqual(synthetic.severity, 'WARNING')
+
+    def test_fetch_logs_with_orphaned_app_logs(self):
+        """Test that orphaned app logs result in synthetic request logs."""
+        # Modify URL matcher to return orphaned app logs
+        def match_url(url):
+            return "logging.googleapis.com/v2/entries:list" in url
+
+        def handle_request(url, payload, method, headers, request, response, **kwargs):
+            response.StatusCode = 200
+            response.Content = json.dumps({
+                'entries': [
+                    # Regular request log with its app log
+                    {
+                        'timestamp': '2024-01-01T12:00:00.000Z',
+                        'protoPayload': {
+                            '@type': 'type.googleapis.com/google.appengine.logging.v1.RequestLog',
+                            'method': 'GET',
+                            'resource': '/api/normal',
+                            'status': 200,
+                        },
+                        'resource': {'labels': {'module_id': 'default', 'version_id': 'v1'}},
+                        'trace': 'projects/testapp/traces/normal-trace'
+                    },
+                    # App log for the normal request
+                    {
+                        'timestamp': '2024-01-01T12:00:00.500Z',
+                        'severity': 'INFO',
+                        'textPayload': 'Normal app log',
+                        'trace': 'projects/testapp/traces/normal-trace'
+                    },
+                    # Orphaned app logs (no matching request log)
+                    {
+                        'timestamp': '2024-01-01T12:00:10.000Z',
+                        'severity': 'ERROR',
+                        'textPayload': 'Orphaned log 1',
+                        'trace': 'projects/testapp/traces/orphan-trace',
+                        'httpRequest': {
+                            'requestMethod': 'POST',
+                            'requestUrl': '/api/orphaned',
+                            'status': 500
+                        },
+                        'resource': {'labels': {'project_id': 'testapp', 'module_id': 'worker', 'version_id': 'v3'}}
+                    },
+                    {
+                        'timestamp': '2024-01-01T12:00:11.000Z',
+                        'severity': 'ERROR',
+                        'textPayload': 'Orphaned log 2',
+                        'trace': 'projects/testapp/traces/orphan-trace',
+                        'resource': {'labels': {'project_id': 'testapp', 'module_id': 'worker', 'version_id': 'v3'}}
+                    }
+                ]
+            }).encode('utf-8')
+
+        # Re-initialize the urlfetch stub with new URL matcher
+        self.testbed.init_urlfetch_stub(urlmatchers=[(match_url, handle_request)])
+        # Fetch logs
+        cursor = request_logs.Cursor(max_age=timedelta(hours=1))
+        logs, _ = self.client.fetch_request_logs(cursor)
+        # Should have 2 request logs: 1 normal + 1 synthetic
+        self.assertEqual(len(logs), 2)
+        # First should be the orphaned synthetic request (newer timestamp)
+        synthetic_log = logs[0]
+        self.assertTrue(synthetic_log.is_synthetic)
+        self.assertEqual(synthetic_log.method, 'POST')
+        self.assertEqual(synthetic_log.resource, '/api/orphaned')
+        self.assertEqual(synthetic_log.status, 500)
+        self.assertEqual(synthetic_log.service, 'worker')
+        self.assertEqual(synthetic_log.version, 'v3')
+        self.assertEqual(len(synthetic_log.logs), 2)
+        self.assertEqual(synthetic_log.severity, 'ERROR')
+
+        # Second should be the normal request
+        normal_log = logs[1]
+        self.assertFalse(normal_log.is_synthetic)
+        self.assertEqual(normal_log.method, 'GET')
+        self.assertEqual(normal_log.resource, '/api/normal')
+        self.assertEqual(len(normal_log.logs), 1)
 
     def test_cursor_functionality(self):
         """Test Cursor encoding/decoding and usage."""
@@ -364,12 +526,10 @@ class RequestLogsClientTest(unittest.TestCase):
             status_filter='5xx',
             page_size=100
         )
-
         # Test encoding to URL-safe string
         encoded = cursor.urlsafe_string()
         self.assertIsInstance(encoded, str)
         self.assertNotIn('=', encoded)  # Should not have padding
-
         # Test decoding from URL-safe string
         decoded = request_logs.Cursor.from_urlsafe_string(encoded)
         # We can't directly compare timestamps since they depend on "now"
@@ -381,14 +541,12 @@ class RequestLogsClientTest(unittest.TestCase):
         self.assertEqual(decoded._status_filter, '5xx')
         self.assertEqual(decoded._page_token, '')
         self.assertEqual(decoded._page_size, 100)
-
         # Test with_page_token method
         new_cursor = cursor.with_page_token('token456')
         self.assertEqual(new_cursor._page_token, 'token456')
         self.assertEqual(new_cursor._service, 'backend')
         # Original cursor should be unchanged
         self.assertEqual(cursor._page_token, '')
-
         # Test using cursor with fetch_logs
         logs, next_cursor = self.client.fetch_request_logs(cursor)
         self.assertIsNotNone(logs)
@@ -401,7 +559,6 @@ class RequestLogsClientTest(unittest.TestCase):
         self.assertEqual(next_cursor._status_filter, '5xx')
         self.assertEqual(next_cursor._page_token, 'token123')  # Next page token from API
         self.assertEqual(next_cursor._page_size, 100)
-
         # Test invalid cursor string
         with self.assertRaises(ValueError):
             request_logs.Cursor.from_urlsafe_string('invalid_cursor')

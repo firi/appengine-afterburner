@@ -122,11 +122,19 @@ class _BufferedStreamHandler(logging.StreamHandler):
             trace = Trace.parsed_from_header(trace_header)
 
         trace_id = f"projects/{project}/traces/{trace.trace_id}"
+
+        # Extract request URL and method from environ
+        url = _get_url(environ)
+        method = environ.get('REQUEST_METHOD', '')
         http_request_data = {
-            # Disable these fields as otherwise the url is shown instead of the
-            # message in the log viewer.
-            # "requestUrl": url,
-            # "requestMethod": method,
+            # Initially we did not output the requestUrl and requestMethod,
+            # as the cloud logs explorer would then not show the message
+            # inline in the viewer, which did not look good. However now that
+            # the logs explorer is borderline unusable and we have our own
+            # request logging API we can really use this information so we
+            # add it again.
+            "requestUrl": url,
+            "requestMethod": method,
             "status": status_code,
         }
         for record in records:
@@ -151,9 +159,8 @@ class _BufferedStreamHandler(logging.StreamHandler):
                     'function': record.funcName,
                 }
             }
+            # Propagate trace sampling information, just to be sure
             if trace.sampled:
-                # Not exactly sure what this gains us, but we have the
-                # information, so let's set it.
                 entry["logging.googleapis.com/trace_sampled"] = trace.sampled
             self.stream.write(json.dumps(entry) + self.terminator)
         self.flush()
