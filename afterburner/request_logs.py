@@ -77,10 +77,9 @@ class RequestLog:
         trace_sampled: A boolean to indicate if this trace ID is sampled in Cloud
             trace. Most traces are not sampled.
         logs: A list of LogMessage objects containing all log messages associated
-            with this request. This includes both application-generated logs (correlated
-            using the trace ID) and system-generated embedded logs from the request
-            itself. Use the is_embedded flag on each LogMessage to distinguish between
-            application logs (is_embedded=False) and system logs (is_embedded=True).
+            with this request. This includes both application-generated logs (
+            correlated using the trace ID) and system-generated embedded logs
+            from the request itself.
         severity: The highest severity level string found among all logs.
             Will be None if there are no logs, or one of DEBUG, INFO, WARNING,
             ERROR, or CRITICAL representing the most severe log level encountered.
@@ -336,13 +335,6 @@ class Client:
             project = get_project_id()
         if not project or not isinstance(project, str):
             raise ValueError("project must be a non-empty string")
-        if not project.strip():
-            raise ValueError("project cannot be an empty or whitespace-only string")
-
-        if service_account_id is not None and not isinstance(service_account_id, str):
-            raise ValueError(f"service_account_id must be a string or None, "
-                             f"got {type(service_account_id).__name__}")
-
         self.project = project
         self._service_account_id = service_account_id
         self._scope = "https://www.googleapis.com/auth/logging.read"
@@ -366,7 +358,6 @@ class Client:
                 the cursor to get to the results.
             - next_cursor: Cursor for fetching next page, or None if no more pages.
         """
-        # Extract parameters from cursor
         start_timestamp = cursor._start_timestamp
         service = cursor._service
         version = cursor._version
@@ -375,7 +366,6 @@ class Client:
         status_filter = cursor._status_filter
         page_token = cursor._page_token
         page_size = cursor._page_size
-
         # Build query filter to get BOTH request logs and app logs
         filters = [
             'resource.type="gae_app"',
@@ -437,7 +427,6 @@ class Client:
             project=self.project,
             service_account_id=self._service_account_id
         )
-
         # Process response. Each of the entries is divided between
         # ruquest logs and application logs. Application logs are grouped on
         # their trace id, which is set by our logging middleware.
@@ -459,43 +448,16 @@ class Client:
         for request_log in request_logs:
             if request_log.trace_id in app_logs_by_trace:
                 request_log._append_logs(app_logs_by_trace[request_log.trace_id])
-
-        # Filter request logs based on min_severity if not showing all
+        # Filter all requests that do not have the minimum severity, if we are
+        # filtering on severity.
         if min_severity != 'ALL':
-            # Map severity to numeric values
-            severity_values = {
-                'ALL': 0,
-                'DEBUG': 100,
-                'INFO': 200,
-                'WARNING': 400,
-                'ERROR': 500,
-                'CRITICAL': 600,
-            }
-            min_severity_value = severity_values.get(min_severity, 200)
-            filtered_logs = []
-            for log in request_logs:
-                # Check if any log meets the severity threshold (only check app logs, not embedded)
-                has_matching_logs = any(
-                    severity_values.get(msg.severity, 0) >= min_severity_value
-                    for msg in log.logs if not msg.is_embedded
-                )
-                if has_matching_logs:
-                    filtered_logs.append(log)
-            request_logs = filtered_logs
-
-        # Create cursor for next page if there is one
+            value = _SEVERITY_ORDER.get(min_severity, 0)
+            request_logs = [log for log in request_logs
+                             if _SEVERITY_ORDER.get(log.severity, 0) >= value]
+        # Create cursor for continuation, if possible.
         next_cursor = None
         if next_page_token:
-            next_cursor = Cursor(
-                _start_timestamp=start_timestamp,
-                service=service,
-                version=version,
-                min_severity=min_severity,
-                path_filter=path_filter,
-                status_filter=status_filter,
-                page_token=next_page_token,
-                page_size=page_size
-            )
+            next_cursor = cursor.with_page_token(next_page_token)
         return request_logs, next_cursor
 
 
