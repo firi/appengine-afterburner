@@ -203,21 +203,25 @@ class Cursor:
     This cursor can be serialized to a URL-safe string and reconstructed, making
     it easy to implement pagination and resumption of log fetching.
     """
-    def __init__(self, max_age: timedelta = None, service: str = '', version: str = '',
-                 min_severity: str = 'ALL', path_filter: str = '',
-                 status_filter: str = '', page_token: str = '', page_size: int = 200,
-                 _start_timestamp: str = None):
-        """Initialize a cursor with all fetch_request_logs parameters.
+    def __init__(self, max_age: timedelta = None,
+                 service: str = '', version: str = '',
+                 min_severity: str = '', status_filter: str = '',
+                 path_filter: str = '',  page_size: int = 200,
+                 _page_token: str = '', _start_timestamp: str = None):
+        """Initialize a cursor for a fetch_request_logs call.
 
         Args:
             max_age: How far back to look for logs (e.g., timedelta(hours=1))
             service: Filter by App Engine service name
             version: Filter by App Engine version
-            min_severity: Minimum severity level for logs
-            path_filter: Filter request paths (supports wildcards)
-            status_filter: Filter by status code ('2xx', '3xx', '4xx', '5xx', 'errors')
-            page_token: Token for pagination (internal use)
+            min_severity: Minimum severity level for logs. Valid values are
+                'DEBUG', 'INFO', 'WARNING', 'ERROR' and 'CRITICAL' or an
+                empty string for no filter.
+            path_filter: Filter by request paths (supports wildcards)
+            status_filter: Filter by status code. Valid values are '2xx', '3xx',
+                '4xx', '5xx' and 'errors' for both 4xx and 5xx statuses.
             page_size: Number of entries to fetch per page
+            _page_token: Internal token for pagination
             _start_timestamp: Internal timestamp (used for pagination)
         """
         # Validate input arguments
@@ -237,7 +241,7 @@ class Cursor:
             raise ValueError(f"service must be a string, got {type(service).__name__}")
         if version and not isinstance(version, str):
             raise ValueError(f"version must be a string, got {type(version).__name__}")
-        valid_severities = ['ALL', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+        valid_severities = ['', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         if min_severity not in valid_severities:
             raise ValueError(f"min_severity must be one of {valid_severities}, got '{min_severity}'")
         valid_status_filters = ['', '2xx', '3xx', '4xx', '5xx', 'errors']
@@ -254,7 +258,7 @@ class Cursor:
         self._min_severity = min_severity
         self._path_filter = path_filter
         self._status_filter = status_filter
-        self._page_token = page_token
+        self._page_token = _page_token
         self._page_size = page_size
 
 
@@ -296,12 +300,12 @@ class Cursor:
             data = json.loads(json_str)
             return Cursor(
                 _start_timestamp=data['ts'],
+                _page_token=data.get('tok', ''),
                 service=data.get('svc', ''),
                 version=data.get('ver', ''),
-                min_severity=data.get('sev', 'ALL'),
+                min_severity=data.get('sev', ''),
                 path_filter=data.get('path', ''),
                 status_filter=data.get('stat', ''),
-                page_token=data.get('tok', ''),
                 page_size=data.get('sz', 200)
             )
         except Exception as e:
@@ -313,12 +317,12 @@ class Cursor:
         """
         return Cursor(
             _start_timestamp=self._start_timestamp,
+            _page_token=page_token,
             service=self._service,
             version=self._version,
             min_severity=self._min_severity,
             path_filter=self._path_filter,
             status_filter=self._status_filter,
-            page_token=page_token,
             page_size=self._page_size
         )
 
@@ -414,7 +418,7 @@ class Client:
             request_log_filter = f'({request_log_filter} AND {" AND ".join(request_filters)})'
         # App log filter are not request logs but potentially have a minimum severity.
         app_log_filter = 'NOT protoPayload.@type="type.googleapis.com/google.appengine.logging.v1.RequestLog"'
-        if min_severity != 'ALL':
+        if min_severity:
             app_log_filter = f'({app_log_filter} AND severity>="{min_severity}")'
         # OR filters to get both types
         filters.append(f'({request_log_filter} OR {app_log_filter})')
@@ -469,7 +473,7 @@ class Client:
             request_logs.append(_create_synthetic_request_log(logs))
         # Filter all requests that do not have the minimum severity, if we are
         # filtering on severity.
-        if min_severity != 'ALL':
+        if min_severity:
             value = _SEVERITY_ORDER.get(min_severity, 0)
             request_logs = [log for log in request_logs
                              if _SEVERITY_ORDER.get(log.severity, 0) >= value]
