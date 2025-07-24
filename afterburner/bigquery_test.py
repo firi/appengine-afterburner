@@ -4,7 +4,7 @@ import datetime
 
 from google.appengine.ext import testbed
 
-from .bigquery import Client, Row, QueryTimeoutError
+from .bigquery import Client, Row, QueryTimeoutError, InsertError
 from .exceptions import RequestFailedError
 
 # Test times that are used in the tests
@@ -54,6 +54,23 @@ class BigQueryClientTest(unittest.TestCase):
         rows = [{"name": "test", "age": 123}]
         with self.assertRaises(RequestFailedError):
             client.insert_rows(table, rows)
+    
+    def test_bigquery_insert_with_row_errors(self):
+        client = Client()
+        # This table name will trigger insert errors in the urlmatcher
+        table = "dataset.witherrors"
+        rows = [
+            {"name": "test1", "age": 123},
+            {"name": "test2", "age": "invalid"},  # This will fail
+            {"name": "test3", "age": 456},
+        ]
+        errors = client.insert_rows(table, rows)
+        
+        # Should have one error for the second row
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], InsertError)
+        self.assertEqual(errors[0].index, 1)
+        self.assertIn("Invalid value", errors[0].message)
 
     def test_bigquery_query(self):
         client = Client()
@@ -77,6 +94,17 @@ class BigQueryClientTest(unittest.TestCase):
         with self.assertRaises(RequestFailedError):
             client.query("SELECT * FROM `afterburner.dataset.timeout`")
 
+
+
+class InsertErrorTest(unittest.TestCase):
+    def test_insert_error_creation(self):
+        error = InsertError(2, "Invalid value for field 'age'")
+        self.assertEqual(error.index, 2)
+        self.assertEqual(error.message, "Invalid value for field 'age'")
+    
+    def test_insert_error_repr(self):
+        error = InsertError(5, "Row too large")
+        self.assertEqual(repr(error), "InsertError(index=5, message='Row too large')")
 
 
 class RowTest(unittest.TestCase):
@@ -180,6 +208,18 @@ def _make_bigquery_urlmatcher():
             if "error500" in url:
                 response.StatusCode = 500
                 response.Content = json.dumps({}).encode('utf-8')
+            elif "witherrors" in url:
+                # Return a response with insert errors
+                response.StatusCode = 200
+                response.Content = json.dumps({
+                    "insertErrors": [{
+                        "index": 1,
+                        "errors": [{
+                            "reason": "invalid",
+                            "message": "Invalid value for field 'age'"
+                        }]
+                    }]
+                }).encode('utf-8')
             else:
                 response.StatusCode = 200
                 response.Content = json.dumps({}).encode('utf-8')

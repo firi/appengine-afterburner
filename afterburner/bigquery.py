@@ -66,7 +66,7 @@ class Client:
         self._scope = "https://www.googleapis.com/auth/bigquery"
 
 
-    def insert_rows(self, dataset_and_table: str, rows, row_ids=None):
+    def insert_rows(self, dataset_and_table: str, rows, row_ids=None) -> List["InsertError"]:
         """
         Insert one or more rows into a BigQuery table.
 
@@ -82,9 +82,8 @@ class Client:
                 type string.
 
         Returns:
-            A list with errors that have occurred. Each error is a dictionary
-            with an 'index' that specifies the row with the error. An "errors"
-            entry in the dictionary has more information about the error. If no
+            A list of InsertError objects that have occurred. Each InsertError
+            contains the index of the failed row and an error message. If no
             errors have occurred, the returned list is empty.
 
         Raises:
@@ -108,11 +107,20 @@ class Client:
                                    project=self.project,
                                    scope=self._scope,
                                    service_account_id=self._service_account_id)
-        return response.get('insertErrors', [])
+
+        # Convert error dictionaries to InsertError objects
+        insert_errors = []
+        for error_dict in response.get('insertErrors', []):
+            index = error_dict.get('index', -1)
+            # Extract the first error message from the errors list
+            errors = error_dict.get('errors', [])
+            message = errors[0]['message'] if errors else 'Unknown error'
+            insert_errors.append(InsertError(index, message))
+        return insert_errors
 
 
 
-    def query(self, query, legacy_sql=False, query_timeout=None, max_results=1000):
+    def query(self, query, legacy_sql=False, query_timeout=None, max_results=1000) -> list["Row"]:
         """
         Run a query, wait for it to finish, then return the result. The entire
         query results are returned in a single request and in memory, so make
@@ -233,6 +241,29 @@ class Row:
         for field, value in self._data.items():
             field_value_pairs.append(f"{field}={value}")
         return f"Row({', '.join(field_value_pairs)})"
+
+
+class InsertError:
+    """
+    Represents an error that occurred during row insertion in BigQuery.
+
+    Properties:
+        index: The index of the row that failed to insert.
+        message: A human-readable error message describing the failure.
+    """
+    def __init__(self, index: int, message: str):
+        """
+        Creates a new InsertError.
+
+        Args:
+            index: The index of the row that failed.
+            message: The error message.
+        """
+        self.index = index
+        self.message = message
+
+    def __repr__(self):
+        return f"InsertError(index={self.index}, message='{self.message}')"
 
 
 def _convert_response_to_rows(response_data) -> List[Row]:
