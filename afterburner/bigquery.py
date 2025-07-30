@@ -306,9 +306,10 @@ def _convert_response_to_rows(response_data) -> List[Row]:
         # TOOD(tijmen): Add more types
         raise ValueError(f"Unsupported type '{type}' in query result")
 
-    # Convert each row in the response to a Row object
+    # Convert each row in the response to a Row object. Note that the 'rows'
+    # keys can be missing for empty results.
     rows = []
-    for row_data in response_data['rows']:
+    for row_data in response_data.get('rows', []):
         values = []
         for field_data, field_name in zip(row_data['f'], field_names):
             field_type = field_types[field_name]

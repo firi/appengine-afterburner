@@ -93,6 +93,12 @@ class BigQueryClientTest(unittest.TestCase):
             client.query("SELECT * FROM `afterburner.dataset.timeout`")
         with self.assertRaises(RequestFailedError):
             client.query("SELECT * FROM `afterburner.dataset.timeout`")
+    
+    def test_bigquery_query_no_rows_key(self):
+        client = Client()
+        # Test response with totalRows=0 but missing 'rows' key
+        results = client.query("SELECT * FROM `afterburner.dataset.norows`")
+        self.assertEqual(len(results), 0)
 
 
 
@@ -193,6 +199,32 @@ _TIMEOUT_RESPONSE = {
     "jobComplete": False,
 }
 
+# Response with totalRows=0 and no 'rows' key
+_NO_ROWS_KEY_RESPONSE = {
+    "kind": "bigquery#queryResponse",
+    "schema": {
+        "fields": [
+            {
+                "name": "name",
+                "type": "STRING",
+                "mode": "NULLABLE"
+            },
+            {
+                "name": "age",
+                "type": "INTEGER",
+                "mode": "NULLABLE"
+            }
+        ]
+    },
+    "jobReference": {
+        "projectId": "afterburner",
+        "jobId": "job12347"
+    },
+    "totalRows": "0",
+    "jobComplete": True,
+    # Note: No 'rows' key at all
+}
+
 
 def _make_bigquery_urlmatcher():
     """
@@ -224,9 +256,13 @@ def _make_bigquery_urlmatcher():
                 response.StatusCode = 200
                 response.Content = json.dumps({}).encode('utf-8')
         elif "/queries" in url:
-            if "timeout" in payload.decode('utf-8'):
+            query_text = payload.decode('utf-8')
+            if "timeout" in query_text:
                 response.StatusCode = 200
                 response.Content = json.dumps(_TIMEOUT_RESPONSE).encode('utf-8')
+            elif "norows" in query_text:
+                response.StatusCode = 200
+                response.Content = json.dumps(_NO_ROWS_KEY_RESPONSE).encode('utf-8')
             else:
                 response.StatusCode = 200
                 response.Content = json.dumps(_QUERY_RESPONSE).encode('utf-8')
