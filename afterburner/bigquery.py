@@ -7,6 +7,12 @@ be used for basic quering. To authenticate, the default App Engine service
 account is used. The BigQuery project is the same as the App Engine project
 by default.
 
+When performing a query using the client, the result is returned as a list
+of Row objects. Each field name in the query is available as a property of
+the returned Row. The client also does automatic type conversion from
+BigQuery types to the appropriate Python objects (int/float/bool). Most
+importantly, TIMESTAMP and DATE typed fields are converted to datetime objects.
+
 The client uses the App Engine urlfetch API to make requests. This gives
 automatic Cloud Trace support and allows for testing using the appengine
 testbed API and the provided urlmatchers in this module.
