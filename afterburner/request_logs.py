@@ -404,14 +404,8 @@ class Client:
             elif status_filter == 'errors':
                 request_filters.append('(protoPayload.status>=400)')
         if path_filter:
-            # Simple escape for the path filter - replace wildcards with regex equivalent
-            # and escape special regex characters manually (except *)
-            escaped = path_filter
-            for char in '.+?^${}[]|()\\':
-                escaped = escaped.replace(char, '\\' + char)
-            # Convert * wildcards to .* regex
-            escaped = escaped.replace('*', '.*')
-            request_filters.append(f'(protoPayload.resource=~"{escaped}")')
+            # Use substring matching for simple path filtering
+            request_filters.append(f'(protoPayload.resource:"{path_filter}")')
         # Build the complete filter
         request_log_filter = 'protoPayload.@type="type.googleapis.com/google.appengine.logging.v1.RequestLog"'
         if request_filters:
@@ -420,6 +414,9 @@ class Client:
         app_log_filter = 'NOT protoPayload.@type="type.googleapis.com/google.appengine.logging.v1.RequestLog"'
         if min_severity:
             app_log_filter = f'({app_log_filter} AND severity>="{min_severity}")'
+        if path_filter:
+            # Also filter app logs by path to avoid synthetic logs with wrong paths
+            app_log_filter = f'({app_log_filter} AND httpRequest.requestUrl:"{path_filter}")'
         # OR filters to get both types
         filters.append(f'({request_log_filter} OR {app_log_filter})')
         filter_str = ' AND '.join(filters)
