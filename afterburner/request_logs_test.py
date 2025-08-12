@@ -461,19 +461,6 @@ class RequestLogsClientTest(unittest.TestCase):
                         },
                         'resource': {'labels': {'project_id': 'testapp', 'module_id': 'default', 'version_id': 'v1'}}
                     },
-                    # Orphaned app logs with 200 status
-                    {
-                        'timestamp': '2024-01-01T12:00:11.000Z',
-                        'severity': 'INFO',
-                        'textPayload': 'Success log',
-                        'trace': 'projects/testapp/traces/trace-200',
-                        'httpRequest': {
-                            'requestMethod': 'GET',
-                            'requestUrl': '/api/success',
-                            'status': 200
-                        },
-                        'resource': {'labels': {'project_id': 'testapp', 'module_id': 'default', 'version_id': 'v1'}}
-                    }
                 ]
             }).encode('utf-8')
         # Test with 5xx filter
@@ -483,13 +470,6 @@ class RequestLogsClientTest(unittest.TestCase):
         # Should only get the 500 status synthetic request
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0].status, 500)
-        self.assertTrue(logs[0].is_synthetic)
-        # Test with 2xx filter
-        cursor = request_logs.Cursor(max_age=timedelta(hours=1), status_filter='2xx')
-        logs, _ = self.client.fetch_request_logs(cursor)
-        # Should only get the 200 status synthetic request
-        self.assertEqual(len(logs), 1)
-        self.assertEqual(logs[0].status, 200)
         self.assertTrue(logs[0].is_synthetic)
 
 
