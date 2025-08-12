@@ -385,7 +385,7 @@ class Client:
         page_size = cursor._page_size
         # Build query filter to get BOTH request logs and app logs
         filters = [
-            'resource.type="gae_app"',
+            f'resource.type="gae_app"',
             f'timestamp>="{start_timestamp}"'
         ]
         if service:
@@ -394,7 +394,7 @@ class Client:
             filters.append(f'resource.labels.version_id="{version}"')
         # Build additional filters for request logs and app logs entries
         request_filters = ['protoPayload.@type="type.googleapis.com/google.appengine.logging.v1.RequestLog"']
-        app_log_filters = ['NOT protoPayload.@type="type.googleapis.com/google.appengine.logging.v1.RequestLog"']
+        app_log_filters = ['(NOT protoPayload.@type="type.googleapis.com/google.appengine.logging.v1.RequestLog")']
         if status_filter:
             # The afterburner logging middleware sets the httpRequest fields
             if status_filter == '2xx':
@@ -423,7 +423,7 @@ class Client:
         request_log_filter = " AND ".join(request_filters)
         app_log_filter = " AND ".join(app_log_filters)
         # OR filters to get both types
-        filters.append(f'({request_log_filter} OR {app_log_filter})')
+        filters.append(f'(({request_log_filter}) OR ({app_log_filter}))')
         filter_str = ' AND '.join(filters)
         # Perform the request
         request_body = {
